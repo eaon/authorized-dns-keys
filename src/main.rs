@@ -4,6 +4,7 @@ use std::env;
 use std::process;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::path::Path;
 use std::collections::HashMap;
 use trust_dns_resolver::Resolver;
 use trust_dns_resolver::lookup::TxtLookup;
@@ -97,12 +98,15 @@ fn map_response(response: &TxtLookup) -> HashMap<i8, String> {
     unordered
 }
 
-fn handle_args() -> String {
+fn handle_args() -> Vec<String> {
     let args: Vec<_> = env::args().collect();
     if args.len() < 2 {
         println!("No username supplied");
         print_help(1);
-    } else if args.len() > 2 {
+    } else if args.len() == 3 && !Path::new(&args[2]).exists() {
+        println!("Authorized Keys file does not exist");
+        print_help(1);
+    } else if args.len() > 3 {
         println!("Too many arguments supplied");
         print_help(1);
     }
@@ -114,36 +118,68 @@ fn handle_args() -> String {
             println!("{} ({})", NAME, VERSION);
             process::exit(0);
         }
-    } 
-    args[1].clone()
+    }
+    args
+}
+
+fn print_pubkey_records(address: &String, fp: &String) {
+    let pk = match File::open(fp) {
+        Ok(f) => f,
+        Err(error) => {
+            println!("Couldn't open {}: {}\n", fp, error);
+            process::exit(1);
+        }
+    };
+    let mut lines = BufReader::new(pk);
+    let mut line = String::new();
+    let mut counter = 0;
+    while lines.read_line(&mut line).unwrap() > 0 {
+        let ns = line.len() - 1;
+        line.truncate(ns);
+        let chars: Vec<char> = line.chars().collect();
+        let split = &chars.chunks(255)
+                    .map(|chunk| chunk.iter().collect::<String>())
+                    .collect::<Vec<_>>();
+        for chunk in split {
+            print!("{}. TXT \"{}\" ", address, counter);
+            println!("\"{}\"", chunk);
+            counter += 1;
+        }
+        line.clear();
+        counter += 1;
+    }
+    process::exit(0);
 }
 
 fn print_help(ec: i32) {
     if ec > 0 {
         println!("");
     }
-    println!("Usage: {} USERNAME\n", NAME);
+    println!("Usage: {} USERNAME [AUTHKEYSFILE]\n", NAME);
     println!("{}", NAME);
     println!("{}", String::from("=").repeat(NAME.chars().count()));
-    println!("Queries and prints SSH public keys from Hesiod-esque DNS TXT records");
+    println!("Queries and prints SSH public keys from/to Hesiod-esque DNS TXT records");
     process::exit(ec);
 }
 
 fn main() {
-    let username = handle_args();
+    let args = handle_args();
+    let username = &args[1];
     let config = HesiodConfig::new();
     let address = format!("{}.ssh{}", username, config.domain());
+    if args.len() > 2 {
+       print_pubkey_records(&address, &args[2]);
+    }
     let response = lookup(&address);
 
     let unordered = map_response(&response);
     for i in 0..unordered.len() {
         let ui = i as i8;
         let record = &unordered[&ui];
-        if record.len() == 255 &&
-           (record.starts_with("ssh-") || !record.contains(" ")) {
-            print!("{}", record);
-        } else {
-            println!("{}", record);
+        print!("{}", record);
+        if record.len() < 255 &&
+           (!record.starts_with("ssh-") || record.contains(" ")) {
+            print!("\n");
         }
     }
 }
