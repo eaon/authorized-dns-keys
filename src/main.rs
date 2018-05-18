@@ -5,7 +5,6 @@ use std::process;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::collections::HashMap;
 use trust_dns_resolver::Resolver;
 use trust_dns_resolver::lookup::TxtLookup;
 
@@ -22,8 +21,9 @@ impl HesiodConfig {
         let hc = match File::open("/etc/hesiod.conf") {
             Ok(f) => f,
             Err(error) => {
-                println!("Couldn't open /etc/hesiod.conf: {}\n", error);
-                println!("Please make sure hesiod is installed and configured first");
+                eprintln!("Couldn't open /etc/hesiod.conf: {}\n", error);
+                eprint!("Please make sure hesiod is installed and ");
+                eprintln!("configured first");
                 process::exit(1);
             }
         };
@@ -57,7 +57,7 @@ fn string_from_rdata(resp: &std::boxed::Box<[u8]>) -> String {
     match String::from_utf8(resp.to_vec()) {
         Ok(s) => s,
         Err(_e) => {
-            println!("Received an unexpected DNS response");
+            eprintln!("Received an unexpected DNS response");
             process::exit(1)
         }
     }
@@ -67,7 +67,7 @@ fn lookup(address: &str) -> TxtLookup {
     let resolver = match Resolver::from_system_conf() {
         Ok(reso) => reso,
         Err(_e) => {
-            println!("Can't set up system resolver");
+            eprintln!("Can't set up system resolver");
             process::exit(1)
         },
     };
@@ -81,105 +81,116 @@ fn lookup(address: &str) -> TxtLookup {
     }
 }
 
-fn map_response(response: &TxtLookup) -> HashMap<i8, String> {
-    let mut unordered = HashMap::new();
-    for keypart in response.iter() {
-        let order = string_from_rdata(&keypart.txt_data()[0]);
-        let order_i = match order.parse::<i8>() {
-            Ok(s) => s,
-            Err(_e) => {
-                println!("Priority field is not a valid 8 bit integer");
-                process::exit(1)
-            }
-        };
-        let record = string_from_rdata(&keypart.txt_data()[1]);
-        unordered.insert(order_i, record);
-    }
-    unordered
+pub trait TxtLookupExt {
+    fn public_ssh_keys(&self) -> Vec<String>;
 }
 
-fn handle_args() -> Vec<String> {
+impl TxtLookupExt for TxtLookup {
+    fn public_ssh_keys(&self) -> Vec<String> {
+        self.iter()
+            .map(|r| r.txt_data()
+                    .iter()
+                    .map(|d| string_from_rdata(d))
+                    .collect::<Vec<_>>()
+                    .join(""))
+            .collect()
+    }
+}
+
+fn handle_args() -> (Vec<String>, Vec<String>) {
+    // This function is me being lazy
     let args: Vec<_> = env::args().collect();
-    if args.len() < 2 {
-        println!("No username supplied");
+    let oargs: Vec<_> = args.iter()
+                        .filter(|a| a.starts_with("-"))
+                        .map(|a| a.trim_left_matches("-").to_string())
+                        .collect();
+    let fargs: Vec<_> = args.iter()
+                       .enumerate()
+                       .filter(|(i, a)| *i != 0 && !a.starts_with("-"))
+                       .map(|(_i, a)| a.clone()).collect();
+    if fargs.len() < 1 {
+        eprintln!("No username supplied");
         print_help(1);
-    } else if args.len() == 3 && !Path::new(&args[2]).exists() {
-        println!("Authorized Keys file does not exist");
+    } else if fargs.len() == 2 && !Path::new(&fargs[1]).exists() {
+        eprintln!("Authorized Keys file does not exist");
         print_help(1);
-    } else if args.len() > 3 {
-        println!("Too many arguments supplied");
+    } else if fargs.len() > 2 {
+        eprintln!("Too many arguments supplied");
         print_help(1);
     }
-    // I'm lazy
-    if args[1].starts_with("-") {
-        if args[1].contains("-h") {
+    if oargs.len() > 0 {
+        if oargs[0].starts_with("h") {
             print_help(0);
-        } else if args[1].contains("-v") {
+        } else if oargs[0].contains("v") {
             println!("{} ({})", NAME, VERSION);
             process::exit(0);
         }
     }
-    args
+    (fargs, oargs)
 }
 
 fn print_pubkey_records(address: &String, fp: &String) {
     let pk = match File::open(fp) {
         Ok(f) => f,
         Err(error) => {
-            println!("Couldn't open {}: {}\n", fp, error);
+            eprintln!("Couldn't open {}: {}\n", fp, error);
             process::exit(1);
         }
     };
     let mut lines = BufReader::new(pk);
     let mut line = String::new();
-    let mut counter = 0;
     while lines.read_line(&mut line).unwrap() > 0 {
         let ns = line.len() - 1;
         line.truncate(ns);
         let chars: Vec<char> = line.chars().collect();
-        let split = &chars.chunks(255)
-                    .map(|chunk| chunk.iter().collect::<String>())
-                    .collect::<Vec<_>>();
-        for chunk in split {
-            print!("{}. TXT \"{}\" ", address, counter);
-            println!("\"{}\"", chunk);
-            counter += 1;
+        // XXX Should deal with bytes instead but also make sure utf-8 chars
+        // aren't mangled
+        let chunks: &Vec<_> = &chars.chunks(255)
+                              .map(|c| c.iter().collect::<String>())
+                              .collect();
+        print!("{}. TXT ", address);
+        for chunk in chunks {
+            print!("\"{}\" ", chunk);
         }
+        println!("");
         line.clear();
-        counter += 1;
     }
-    process::exit(0);
+}
+
+fn print_nsupdate_commands(address: &String, fp: &String) {
+    println!("TODO ... {} / {}", address, fp);
 }
 
 fn print_help(ec: i32) {
     if ec > 0 {
-        println!("");
+        eprintln!("");
     }
-    println!("Usage: {} USERNAME [AUTHKEYSFILE]\n", NAME);
+    println!("Usage: {} USERNAME [--nsupdate] [AUTHKEYSFILE]\n", NAME);
     println!("{}", NAME);
-    println!("{}", String::from("=").repeat(NAME.chars().count()));
-    println!("Queries and prints SSH public keys from/to Hesiod-esque DNS TXT records");
+    println!("{}", "=".to_string().repeat(NAME.chars().count()));
+    print!("Queries and prints SSH public keys from/to Hesiod-esque DNS TXT");
+    println!(" records");
     process::exit(ec);
 }
 
 fn main() {
-    let args = handle_args();
-    let username = &args[1];
+    let (args, opts) = handle_args();
+    let username = &args[0];
     let config = HesiodConfig::new();
     let address = format!("{}.ssh{}", username, config.domain());
-    if args.len() > 2 {
-       print_pubkey_records(&address, &args[2]);
+    if args.len() == 2 &&
+       opts.len() < 1 {
+        print_pubkey_records(&address, &args[1]);
+        process::exit(0);
+    } else if args.len() == 2 &&
+              opts.len() == 1 &&
+              opts[0].contains("nsupdate") {
+        print_nsupdate_commands(&address, &args[1]);
+        process::exit(0);
     }
     let response = lookup(&address);
 
-    let unordered = map_response(&response);
-    for i in 0..unordered.len() {
-        let ui = i as i8;
-        let record = &unordered[&ui];
-        print!("{}", record);
-        if record.len() < 255 &&
-           (!record.starts_with("ssh-") || record.contains(" ")) {
-            print!("\n");
-        }
+    for line in response.public_ssh_keys() {
+        println!("{}", line);
     }
 }
