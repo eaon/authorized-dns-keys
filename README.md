@@ -14,7 +14,7 @@ live in `$user.ssh$lhs$rhs` and look like this:
 
 Requires a `/etc/hesiod.conf` configuration file.
 
-## Isn't this kind of pointless as the same can be achieved with a tiny `bash` script utilising `hesinfo`?
+### Isn't this kind of pointless as the same can be achieved with `AuthorizedKeysCommand /usr/bin/hesinfo %u ssh`?
 
-I initially misremembered what TXT records look like, and I wanted to learn
-about Rust, so 🤷‍♂️
+Yes, however I initially misremembered how TXT records work, and I wanted to
+learn about Rust and this was a simple enough project to try, so 🤷‍♂️

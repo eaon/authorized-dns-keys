@@ -8,8 +8,8 @@ use std::path::Path;
 use trust_dns_resolver::Resolver;
 use trust_dns_resolver::lookup::TxtLookup;
 
-const NAME: &'static str = env!("CARGO_PKG_NAME");
-const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+const NAME: &str = env!("CARGO_PKG_NAME");
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 struct HesiodConfig {
     lhs: String,
@@ -34,7 +34,7 @@ impl HesiodConfig {
             if line.len() > 4 && line.contains("hs=") {
                 let ns = line.len() - 1;
                 line.truncate(ns);
-                let value = format!("{}", line)[4..].to_string();
+                let value = line.clone()[4..].to_string();
                 if line.starts_with("lhs=") {
                     values.insert(0, value);
                 } else if line.starts_with("rhs=") {
@@ -101,14 +101,14 @@ fn handle_args() -> (Vec<String>, Vec<String>) {
     // This function is me being lazy
     let args: Vec<_> = env::args().collect();
     let oargs: Vec<_> = args.iter()
-                        .filter(|a| a.starts_with("-"))
-                        .map(|a| a.trim_left_matches("-").to_string())
+                        .filter(|a| a.starts_with('-'))
+                        .map(|a| a.trim_left_matches('-').to_string())
                         .collect();
     let fargs: Vec<_> = args.iter()
                        .enumerate()
-                       .filter(|(i, a)| *i != 0 && !a.starts_with("-"))
+                       .filter(|(i, a)| *i != 0 && !a.starts_with('-'))
                        .map(|(_i, a)| a.clone()).collect();
-    if fargs.len() < 1 {
+    if fargs.is_empty() {
         eprintln!("No username supplied");
         print_help(1);
     } else if fargs.len() == 2 && !Path::new(&fargs[1]).exists() {
@@ -118,10 +118,10 @@ fn handle_args() -> (Vec<String>, Vec<String>) {
         eprintln!("Too many arguments supplied");
         print_help(1);
     }
-    if oargs.len() > 0 {
-        if oargs[0].starts_with("h") {
+    if oargs.is_empty() {
+        if oargs[0].starts_with('h') {
             print_help(0);
-        } else if oargs[0].contains("v") {
+        } else if oargs[0].contains('v') {
             println!("{} ({})", NAME, VERSION);
             process::exit(0);
         }
@@ -129,7 +129,7 @@ fn handle_args() -> (Vec<String>, Vec<String>) {
     (fargs, oargs)
 }
 
-fn print_pubkey_records(address: &String, fp: &String) {
+fn print_pubkey_records(address: &str, fp: &str) {
     let pk = match File::open(fp) {
         Ok(f) => f,
         Err(error) => {
@@ -152,18 +152,18 @@ fn print_pubkey_records(address: &String, fp: &String) {
         for chunk in chunks {
             print!("\"{}\" ", chunk);
         }
-        println!("");
+        println!();
         line.clear();
     }
 }
 
-fn print_nsupdate_commands(address: &String, fp: &String) {
+fn print_nsupdate_commands(address: &str, fp: &str) {
     println!("TODO ... {} / {}", address, fp);
 }
 
 fn print_help(ec: i32) {
     if ec > 0 {
-        eprintln!("");
+        eprintln!();
     }
     println!("Usage: {} USERNAME [--nsupdate] [AUTHKEYSFILE]\n", NAME);
     println!("{}", NAME);
@@ -179,7 +179,7 @@ fn main() {
     let config = HesiodConfig::new();
     let address = format!("{}.ssh{}", username, config.domain());
     if args.len() == 2 &&
-       opts.len() < 1 {
+       opts.is_empty() {
         print_pubkey_records(&address, &args[1]);
         process::exit(0);
     } else if args.len() == 2 &&
