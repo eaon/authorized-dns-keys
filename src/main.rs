@@ -128,34 +128,21 @@ fn print_pubkey_records(address: &str, path: &PathBuf) {
             process::exit(1);
         }
     };
-    let mut lines = BufReader::new(pk);
-    let mut line = String::new();
-    while lines.read_line(&mut line).unwrap() > 0 {
-        // Remove newline
-        let nonl = line.len() - 1;
-        line.truncate(nonl);
+    for line in BufReader::new(pk).lines().map(|l| l.unwrap()) {
         // TXT records can be 255 bytes long rather than 255 characters long
         // Make sure we don't mess that up
-        let chars: Vec<char> = line.chars().collect();
-        let charl: Vec<usize> = chars.iter().map(|c| c.len_utf8()).collect();
-        let mut chunks = Vec::<String>::new();
-        let mut chunk = String::new();
+        let chars: Vec<_> = line.chars().map(|c| (c, c.len_utf8())).collect();
+        print!("{}. TXT \"", address);
         let mut chunkl: usize = 0;
-        for i in 0..chars.len() {
-            chunk.push(chars[i]);
-            chunkl += charl[i];
-            if chunkl == 255 || i + 1 == chars.len() {
-                chunks.push(chunk.clone());
-                chunk.clear();
+        for char in chars {
+            print!("{}", char.0);
+            chunkl += char.1;
+            if chunkl == 255 {
+                print!("\" \"");
                 chunkl = 0;
             }
         }
-        print!("{}. TXT ", address);
-        for chunk in chunks {
-            print!("\"{}\" ", chunk);
-        }
-        println!();
-        line.clear();
+        println!("\"");
     }
 }
 
@@ -168,7 +155,7 @@ fn main() {
     let config = HesiodConfig::new(&opt.config);
     let address = format!("{}.ssh{}", opt.username, config.domain());
     if opt.nsupdate {
-        if let None = opt.authkeysfile {
+        if opt.authkeysfile.is_none() {
             println!("<authkeysfile> needs to be supplied when using --nsupdate");
             process::exit(0);
         }
