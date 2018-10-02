@@ -1,15 +1,27 @@
+#[macro_use]
+extern crate structopt;
 extern crate trust_dns_resolver;
 
-use std::env;
+use structopt::StructOpt;
 use std::process;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use trust_dns_resolver::Resolver;
 use trust_dns_resolver::lookup::TxtLookup;
 
-const NAME: &str = env!("CARGO_PKG_NAME");
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+#[derive(StructOpt)]
+#[structopt(name = "authorized-dns-keys", about = "Queries and prints SSH public keys from/to Hesiod-esque DNS TXT")]
+struct Opt {
+    #[structopt(parse(from_str))]
+    username: String,
+    #[structopt(long = "nsupdate")]
+    nsupdate: bool,
+    #[structopt(short = "c", long = "config", parse(from_os_str))]
+    config: Option<PathBuf>,
+    #[structopt(parse(from_os_str))]
+    authkeysfile: Option<PathBuf>
+}
 
 struct HesiodConfig {
     lhs: String,
@@ -17,11 +29,21 @@ struct HesiodConfig {
 }
 
 impl HesiodConfig {
-    pub fn new() -> HesiodConfig {
-        let hc = match File::open("/etc/hesiod.conf") {
+    pub fn new(from_path: &Option<PathBuf>) -> HesiodConfig {
+        let path = match from_path {
+            Some(path) => {
+                if ! path.as_path().exists() {
+                    eprintln!("Hesiod config '{}' does not exist", path.display());
+                    process::exit(1);
+                }
+                path.as_path()
+            },
+            None => Path::new("/etc/hesiod.conf")
+        };
+        let hc = match File::open(path) {
             Ok(f) => f,
             Err(error) => {
-                eprintln!("Couldn't open /etc/hesiod.conf: {}\n", error);
+                eprintln!("Couldn't open '{}': {}\n", path.display(),  error);
                 eprint!("Please make sure hesiod is installed and ");
                 eprintln!("configured first");
                 process::exit(1);
@@ -51,6 +73,7 @@ impl HesiodConfig {
     fn domain(&self) -> String {
         format!("{}{}", self.lhs, self.rhs)
     }
+
 }
 
 fn string_from_rdata(resp: &std::boxed::Box<[u8]>) -> String {
@@ -97,57 +120,36 @@ impl TxtLookupExt for TxtLookup {
     }
 }
 
-fn handle_args() -> (Vec<String>, Vec<String>) {
-    // This function is me being lazy
-    let args: Vec<_> = env::args().collect();
-    let oargs: Vec<_> = args.iter()
-                        .filter(|a| a.starts_with('-'))
-                        .map(|a| a.trim_left_matches('-').to_string())
-                        .collect();
-    let fargs: Vec<_> = args.iter()
-                       .enumerate()
-                       .filter(|(i, a)| *i != 0 && !a.starts_with('-'))
-                       .map(|(_i, a)| a.clone()).collect();
-    if fargs.is_empty() {
-        eprintln!("No username supplied");
-        print_help(1);
-    } else if fargs.len() == 2 && !Path::new(&fargs[1]).exists() {
-        eprintln!("Authorized Keys file does not exist");
-        print_help(1);
-    } else if fargs.len() > 2 {
-        eprintln!("Too many arguments supplied");
-        print_help(1);
-    }
-    if oargs.is_empty() {
-        if oargs[0].starts_with('h') {
-            print_help(0);
-        } else if oargs[0].contains('v') {
-            println!("{} ({})", NAME, VERSION);
-            process::exit(0);
-        }
-    }
-    (fargs, oargs)
-}
-
-fn print_pubkey_records(address: &str, fp: &str) {
-    let pk = match File::open(fp) {
+fn print_pubkey_records(address: &str, path: &PathBuf) {
+    let pk = match File::open(path) {
         Ok(f) => f,
         Err(error) => {
-            eprintln!("Couldn't open {}: {}\n", fp, error);
+            eprintln!("Couldn't open '{}': {}\n", path.display(), error);
             process::exit(1);
         }
     };
     let mut lines = BufReader::new(pk);
     let mut line = String::new();
     while lines.read_line(&mut line).unwrap() > 0 {
-        let ns = line.len() - 1;
-        line.truncate(ns);
+        // Remove newline
+        let nonl = line.len() - 1;
+        line.truncate(nonl);
+        // TXT records can be 255 bytes long rather than 255 characters long
+        // Make sure we don't mess that up
         let chars: Vec<char> = line.chars().collect();
-        // XXX Should deal with bytes instead but also make sure utf-8 chars
-        // aren't mangled
-        let chunks: &Vec<_> = &chars.chunks(255)
-                              .map(|c| c.iter().collect::<String>())
-                              .collect();
+        let charl: Vec<usize> = chars.iter().map(|c| c.len_utf8()).collect();
+        let mut chunks = Vec::<String>::new();
+        let mut chunk = String::new();
+        let mut chunkl: usize = 0;
+        for i in 0..chars.len() {
+            chunk.push(chars[i]);
+            chunkl += charl[i];
+            if chunkl == 255 || i + 1 == chars.len() {
+                chunks.push(chunk.clone());
+                chunk.clear();
+                chunkl = 0;
+            }
+        }
         print!("{}. TXT ", address);
         for chunk in chunks {
             print!("\"{}\" ", chunk);
@@ -161,31 +163,20 @@ fn print_nsupdate_commands(address: &str, fp: &str) {
     println!("TODO ... {} / {}", address, fp);
 }
 
-fn print_help(ec: i32) {
-    if ec > 0 {
-        eprintln!();
-    }
-    println!("Usage: {} USERNAME [--nsupdate] [AUTHKEYSFILE]\n", NAME);
-    println!("{}", NAME);
-    println!("{}", "=".to_string().repeat(NAME.chars().count()));
-    print!("Queries and prints SSH public keys from/to Hesiod-esque DNS TXT");
-    println!(" records");
-    process::exit(ec);
-}
-
 fn main() {
-    let (args, opts) = handle_args();
-    let username = &args[0];
-    let config = HesiodConfig::new();
-    let address = format!("{}.ssh{}", username, config.domain());
-    if args.len() == 2 &&
-       opts.is_empty() {
-        print_pubkey_records(&address, &args[1]);
+    let opt = Opt::from_args();
+    let config = HesiodConfig::new(&opt.config);
+    let address = format!("{}.ssh{}", opt.username, config.domain());
+    if opt.nsupdate {
+        if let None = opt.authkeysfile {
+            println!("<authkeysfile> needs to be supplied when using --nsupdate");
+            process::exit(0);
+        }
+        print_nsupdate_commands(&address, &opt.username);
         process::exit(0);
-    } else if args.len() == 2 &&
-              opts.len() == 1 &&
-              opts[0].contains("nsupdate") {
-        print_nsupdate_commands(&address, &args[1]);
+    }
+    if let Some(ref authkf) = opt.authkeysfile {
+        print_pubkey_records(&address, &*authkf);
         process::exit(0);
     }
     let response = lookup(&address);

@@ -1,7 +1,8 @@
 [package]
 name = "authorized-dns-keys"
-version = "0.4.1"
+version = "0.5.0"
 authors = ["eaon <eaon@mit.edu>"]
 
 [dependencies]
-trust-dns-resolver = { version = "0.8.2" }
+structopt = "0.2.*"
+trust-dns-resolver = "0.8.*"
